@@ -8,8 +8,8 @@ import os
 # --- FastAPI App ---
 app = FastAPI(
     title="HDRezka Unofficial API",
-    description="API для поиска контента через ScrapingBee с включенным JS-рендерингом.",
-    version="2.3.0 (debug)",
+    description="API для поиска контента через ScrapingBee с премиум-прокси.",
+    version="2.4.0",
 )
 
 # --- Конфигурация ---
@@ -27,27 +27,6 @@ client = ScrapingBeeClient(api_key=API_KEY)
 def root():
     return RedirectResponse(url="/docs")
 
-@app.get("/api/debug", tags=["Debug"], response_class=HTMLResponse)
-def debug_page_content(url: str):
-    """
-    Отладочный эндпоинт. Получает URL и возвращает сырой HTML-контент
-    после JS-рендеринга.
-    """
-    params = {
-        'render_js': True,
-        'wait': '2000' # Даем 2 секунды на прогрузку
-    }
-    try:
-        response = client.get(url, params=params)
-        if response.status_code >= 400:
-            raise HTTPException(
-                status_code=response.status_code,
-                detail=f"Прокси-сервис вернул ошибку: {response.text}"
-            )
-        return HTMLResponse(content=response.text, status_code=200)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Произошла внутренняя ошибка: {e}")
-
 @app.get("/api/search", tags=["Content"])
 def search_content(q: str):
     if not q:
@@ -56,9 +35,11 @@ def search_content(q: str):
     encoded_q = quote(q)
     search_url = f"{BASE_URL}/search/?do=search&subaction=search&q={encoded_q}"
     
+    # Параметры для ScrapingBee: включаем JS и премиум-прокси
     params = {
         'render_js': True,
-        'wait_for': '.b-content__inline_item',
+        'premium_proxy': True, # <-- Финальное изменение!
+        'timeout': 20000 # Увеличиваем таймаут для сложных сценариев
     }
 
     try:
@@ -75,14 +56,14 @@ def search_content(q: str):
         items = soup.find_all("div", class_="b-content__inline_item")
 
         if not items:
-            raise HTTPException(status_code=404, detail="Парсер не нашел контейнеры с фильмами после JS-рендеринга.")
+            # Возвращаем HTML в ошибке, чтобы посмотреть, что пошло не так
+            raise HTTPException(status_code=404, detail=f"Парсер не нашел элементы. HTML: {response.text}")
             
         results = []
         for item in items:
             link_tag = item.find("a", class_="b-content__inline_item-link")
             img_tag = item.find("img")
             
-            # Если внутренняя структура элемента не соответствует ожиданиям, мы его пропустим
             if link_tag and img_tag:
                 results.append({
                     "title": img_tag.get("alt"),
