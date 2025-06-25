@@ -1,52 +1,31 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import RedirectResponse
-import cloudscraper
+from scrapingbee import ScrapingBeeClient
 from bs4 import BeautifulSoup
 from urllib.parse import quote
-import requests
-from requests.adapters import HTTPAdapter
-
-# --- SSL/TLS Handshake Fix ---
-# hdrezka.ag uses advanced TLS fingerprinting. We need to mimic a browser's cipher suite.
-# This is a robust cipher suite from a modern browser.
-CIPHERS = (
-    'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:'
-    'ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:'
-    'DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384'
-)
-
-class TlsV1_2HttpAdapter(HTTPAdapter):
-    """A custom HTTP adapter that forces TLSv1.2 and a specific cipher suite."""
-    def __init__(self, *args, **kwargs):
-        # We need to import this within the class on some platforms
-        from ssl import PROTOCOL_TLSv1_2
-        self.ssl_context = requests.packages.urllib3.util.ssl_.create_urllib3_context(
-            ciphers=CIPHERS,
-            ssl_version=PROTOCOL_TLSv1_2
-        )
-        super().__init__(*args, **kwargs)
-
-    def init_poolmanager(self, connections, maxsize, block=False):
-        self.poolmanager = requests.packages.urllib3.poolmanager.PoolManager(
-            num_pools=connections,
-            maxsize=maxsize,
-            block=block,
-            ssl_context=self.ssl_context
-        )
+import os
 
 # --- FastAPI App ---
-
 app = FastAPI(
     title="HDRezka Unofficial API",
-    description="API for searching content, with advanced TLS handshake bypass.",
-    version="1.3.0",
+    description="API для поиска контента через ScrapingBee прокси.",
+    version="2.0.0",
 )
 
-# Create a scraper instance and mount our custom adapter
-scraper = cloudscraper.create_scraper()
-scraper.mount("https://", TlsV1_2HttpAdapter())
-
+# --- Конфигурация ---
 BASE_URL = "https://hdrezka.ag"
+
+# Получаем API ключ из переменных окружения Vercel
+API_KEY = os.environ.get('SCRAPINGBEE_API_KEY')
+
+# Проверяем, доступен ли ключ
+if not API_KEY:
+    # Эта ошибка будет видна в логах Vercel, если ключ не установлен
+    raise RuntimeError("SCRAPINGBEE_API_KEY is not set in environment variables")
+
+client = ScrapingBeeClient(api_key=API_KEY)
+
+# --- Маршруты API ---
 
 @app.get("/", tags=["General"])
 def root():
@@ -61,9 +40,15 @@ def search_content(q: str):
     search_url = f"{BASE_URL}/search/?do=search&subaction=search&q={encoded_q}"
     
     try:
-        response = scraper.get(search_url, timeout=15)
-        response.raise_for_status()
+        # Отправляем запрос через ScrapingBee
+        response = client.get(search_url)
         
+        if response.status_code >= 400:
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"Прокси-сервис вернул ошибку: {response.text}"
+            )
+
         soup = BeautifulSoup(response.text, "lxml")
         
         results = []
@@ -87,4 +72,4 @@ def search_content(q: str):
         return {"results": results}
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
+        raise HTTPException(status_code=500, detail=f"Произошла внутренняя ошибка: {e}")
