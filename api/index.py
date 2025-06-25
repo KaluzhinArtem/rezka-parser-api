@@ -8,8 +8,8 @@ import os
 # --- FastAPI App ---
 app = FastAPI(
     title="HDRezka Unofficial API",
-    description="API для поиска контента через ScrapingBee прокси.",
-    version="2.1.0 (debug)",
+    description="API для поиска контента через ScrapingBee с включенным JS-рендерингом.",
+    version="2.2.0",
 )
 
 # --- Конфигурация ---
@@ -27,23 +27,6 @@ client = ScrapingBeeClient(api_key=API_KEY)
 def root():
     return RedirectResponse(url="/docs")
 
-@app.get("/api/debug", tags=["Debug"], response_class=HTMLResponse)
-def debug_page_content(url: str):
-    """
-    Отладочный эндпоинт. Получает URL и возвращает сырой HTML-контент,
-    который видит ScrapingBee.
-    """
-    try:
-        response = client.get(url)
-        if response.status_code >= 400:
-            raise HTTPException(
-                status_code=response.status_code,
-                detail=f"Прокси-сервис вернул ошибку: {response.text}"
-            )
-        return HTMLResponse(content=response.text, status_code=200)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Произошла внутренняя ошибка: {e}")
-
 @app.get("/api/search", tags=["Content"])
 def search_content(q: str):
     if not q:
@@ -52,8 +35,14 @@ def search_content(q: str):
     encoded_q = quote(q)
     search_url = f"{BASE_URL}/search/?do=search&subaction=search&q={encoded_q}"
     
+    # Параметры для ScrapingBee: включаем JS-рендеринг
+    params = {
+        'render_js': True, # <-- Главное изменение!
+        'wait_for': '.b-content__inline_item', # Ждем появления элемента с результатами
+    }
+
     try:
-        response = client.get(search_url)
+        response = client.get(search_url, params=params)
         
         if response.status_code >= 400:
             raise HTTPException(
@@ -66,8 +55,7 @@ def search_content(q: str):
         items = soup.find_all("div", class_="b-content__inline_item")
 
         if not items:
-            # Мы изменили сообщение об ошибке, чтобы оно было более информативным
-            raise HTTPException(status_code=404, detail="Парсер не нашел элементы с фильмами на странице. Возможно, изменилась структура сайта.")
+            raise HTTPException(status_code=404, detail="Парсер не нашел элементы с фильмами после JS-рендеринга. Структура сайта могла измениться.")
             
         results = []
         for item in items:
@@ -86,3 +74,5 @@ def search_content(q: str):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Произошла внутренняя ошибка: {e}")
+
+# Отладочный эндпоинт больше не нужен, так как основная проблема ясна.
